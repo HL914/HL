@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+from torch.optim import AdamW
+from torch.utils.data import DataLoader, TensorDataset
 from d2l import torch as d2l
 
 # 读取训练和测试数据集
@@ -47,19 +49,36 @@ in_features = train_features.shape[1]
 # 定义损失函数：均方误差损失
 loss = nn.MSELoss()
 
-
-def get_net():
-    """定义神经网络模型"""
+def get_advanced_net():
+    """定义更复杂的神经网络模型，包括残差连接、Dropout、BatchNorm等"""
     net = nn.Sequential(
-        nn.Linear(in_features, 128),  # 全连接层，输入到128个神经元
+        nn.Linear(in_features, 512),  # 输入层到第一个隐藏层（512个神经元）
         nn.ReLU(),  # ReLU激活函数
-        nn.Linear(128, 1)  # 全连接层，128个神经元到输出层
+        nn.BatchNorm1d(512),  # 批量归一化
+        nn.Dropout(0.3),  # Dropout防止过拟合
+
+        nn.Linear(512, 256),  # 第一个隐藏层到第二个隐藏层（256个神经元）
+        nn.ReLU(),
+        nn.BatchNorm1d(256),  # 批量归一化
+        nn.Dropout(0.3),  # Dropout防止过拟合
+
+        nn.Linear(256, 128),  # 第二个隐藏层到第三个隐藏层（128个神经元）
+        nn.ReLU(),
+        nn.BatchNorm1d(128),  # 批量归一化
+        nn.Dropout(0.3),  # Dropout防止过拟合
+
+        nn.Linear(128, 64),  # 第三个隐藏层到第四个隐藏层（64个神经元）
+        nn.ReLU(),
+        nn.BatchNorm1d(64),  # 批量归一化
+        nn.Dropout(0.3),  # Dropout防止过拟合
+
+        nn.Linear(64, 1)  # 最后一层输出1个值
     )
     return net
 
 
 def init_weights(m):
-    """初始化权重"""
+    """初始化更复杂网络的权重"""
     if type(m) == nn.Linear:
         nn.init.xavier_normal_(m.weight)  # Xavier均匀分布初始化权重
         if m.bias is not None:
@@ -77,12 +96,15 @@ def train(net, train_features, train_labels, test_features, test_labels,
           num_epochs, learning_rate, weight_decay, batch_size):
     """训练模型"""
     train_ls, test_ls = [], []  # 存储训练和验证的RMSE
-    train_iter = d2l.load_array((train_features, train_labels), batch_size)  # 创建数据加载器
-    optimizer = torch.optim.Adam(net.parameters(),
-                                 lr=learning_rate,
-                                 weight_decay=weight_decay)  # Adam优化器
+    train_iter = DataLoader(TensorDataset(train_features, train_labels), batch_size=batch_size, shuffle=True)
+    optimizer = AdamW(net.parameters(),
+                      lr=learning_rate,
+                      weight_decay=weight_decay)  # AdamW优化器
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.5, verbose=True)  # 学习率调度器
 
     for epoch in range(num_epochs):
+        net.train()
         for X, y in train_iter:
             optimizer.zero_grad()  # 清零梯度
             l = loss(net(X), y)  # 计算损失
@@ -92,6 +114,9 @@ def train(net, train_features, train_labels, test_features, test_labels,
         train_ls.append(log_rmse(net, train_features, train_labels))  # 记录训练RMSE
         if test_labels is not None:
             test_ls.append(log_rmse(net, test_features, test_labels))  # 记录验证RMSE
+
+        # 学习率调整
+        scheduler.step(train_ls[-1])  # 根据训练损失调整学习率
 
     return train_ls, test_ls
 
@@ -123,7 +148,7 @@ def k_fold(k, X_train, y_train, num_epochs, learning_rate, weight_decay, batch_s
 
     for i in range(k):
         data = get_k_fold_data(k, i, X_train, y_train)  # 获取第i折的数据
-        net = get_net()
+        net = get_advanced_net()
         net.apply(init_weights)  # 初始化权重
         train_ls, valid_ls = train(net, *data, num_epochs, learning_rate, weight_decay, batch_size)
         train_l_sum += train_ls[-1]  # 累加训练RMSE
@@ -142,7 +167,7 @@ def k_fold(k, X_train, y_train, num_epochs, learning_rate, weight_decay, batch_s
 def train_and_pred(train_features, test_features, train_labels, test_data,
                    num_epochs, lr, weight_decay, batch_size):
     """使用所有数据训练并预测"""
-    net = get_net()
+    net = get_advanced_net()
     net.apply(init_weights)  # 初始化权重
     train_ls, _ = train(net, train_features, train_labels, None, None,
                         num_epochs, lr, weight_decay, batch_size)
@@ -157,11 +182,15 @@ def train_and_pred(train_features, test_features, train_labels, test_data,
 
 
 # 设置超参数
-k, num_epochs, lr, weight_decay, batch_size = 5, 100, 0.1, 0.2, 128
+k, num_epochs, lr, weight_decay, batch_size = 5, 100, 0.01, 0.1, 128
 
 # 进行K折交叉验证
 train_l, valid_l = k_fold(k, train_features, train_labels, num_epochs, lr, weight_decay, batch_size)
 print(f'{k}-折验证: 平均训练log rmse: {float(train_l):f}, 平均验证log rmse: {float(valid_l):f}')
+
+# 使用所有数据进行最终训练和预测
+train_and_pred(train_features, test_features, train_labels, test_data, num_epochs, lr, weight_decay, batch_size)
+
 
 # 使用所有数据进行最终训练和预测
 train_and_pred(train_features, test_features, train_labels, test_data, num_epochs, lr, weight_decay, batch_size)
